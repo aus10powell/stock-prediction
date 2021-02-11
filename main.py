@@ -30,6 +30,7 @@ def load_data(ticker):
     return data
 
 st.spinner(text='Training progress...')
+
 data_load_state = st.text('Loading data...')
 data = load_data(selected_stock)
 data_load_state.text('Loading data... done!')
