@@ -11,11 +11,15 @@ START = "2015-01-01"
 TODAY = date.today().strftime("%Y-%m-%d")
 
 st.title('Stock Forecast App')
+st.subheader('Austin Powell')
 
-stocks = ('GOOG', 'AAPL', 'MSFT', 'GME')
-selected_stock = st.selectbox('Select dataset for prediction', stocks)
+# stocks = ('TSLA','GOOG', 'AAPL', 'MSFT', 'GME')
+# selected_stock = st.selectbox('Select dataset for prediction ({})'.format(stocks), stocks)
 
-n_years = st.slider('Years of prediction:', 1, 4)
+default_value_goes_here = 'GME'
+selected_stock = st.text_input("Input stock ticker symbol for prediction", default_value_goes_here)
+
+n_years = st.slider('Years ahead to predict prediction:', 1, 4)
 period = n_years * 365
 
 
@@ -25,7 +29,7 @@ def load_data(ticker):
     data.reset_index(inplace=True)
     return data
 
-	
+st.spinner(text='Training progress...')
 data_load_state = st.text('Loading data...')
 data = load_data(selected_stock)
 data_load_state.text('Loading data... done!')
@@ -33,6 +37,10 @@ data_load_state.text('Loading data... done!')
 st.subheader('Raw data')
 st.write(data.tail())
 
+add_selectbox = st.sidebar.text_area(
+    "Any feedback on app?", "---> Love it! \n ---> Not sure how to process the data? \ns---> Suggested Improvements?"
+)
+ 
 # Plot raw data
 def plot_raw_data():
 	fig = go.Figure()
@@ -48,18 +56,26 @@ df_train = data[['Date','Close']]
 df_train = df_train.rename(columns={"Date": "ds", "Close": "y"})
 
 m = Prophet()
+
 m.fit(df_train)
 future = m.make_future_dataframe(periods=period)
 forecast = m.predict(future)
 
 # Show and plot forecast
-st.subheader('Forecast data')
+st.markdown("""
+## Forecast
+### Forecast data
+""")
 st.write(forecast.tail())
     
-st.write(f'Forecast plot for {n_years} years')
+st.markdown("### Forecast plot for {} years".format(n_years))
 fig1 = plot_plotly(m, forecast)
 st.plotly_chart(fig1)
 
-st.write("Forecast components")
+#st.write("Forecast components")
+st.markdown("""
+### Forecast seasonal components:
+Time series broken appart into seasonal components. Can give you an idea of what happens on a regular basis with the data.
+""")
 fig2 = m.plot_components(forecast)
 st.write(fig2)
