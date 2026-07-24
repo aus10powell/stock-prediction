@@ -1,4 +1,6 @@
-# stock-prediction
-Interactive Streamlit app forecasting stocks
+# Legacy Streamlit app
 
-## App live here: https://stock-prediction707.herokuapp.com
+Original Heroku deployment using Streamlit + `fbprophet`.
+
+This stack does not run on Vercel (long-lived Python server + heavy native deps).
+The live app is now the Next.js project at the repository root.
