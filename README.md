@@ -2,7 +2,9 @@
 
 Interactive stock forecasting app by **Austin Powell**.
 
-Enter a ticker, choose how many years ahead to project, and explore price history plus trend / seasonal forecast charts.
+Enter a ticker, choose forecast and trading-day horizons, and explore price
+history, trend / seasonal forecasts, and Monte Carlo probabilities for a move
+of at least 1% in either direction.
 
 ## Live on Vercel
 
@@ -26,7 +28,11 @@ npx vercel --prod
 - **Next.js** (App Router) on Vercel
 - **Yahoo Finance** market history via `yahoo-finance2`
 - Additive forecast (trend + weekly + yearly seasonality), inspired by the original Prophet model
+- Seeded 10,000-path block-bootstrap simulation using recent adjusted returns
 - **Recharts** for interactive plots
+
+The probability simulation is based on historical returns. It is not investment
+advice and does not account for future news or changing market regimes.
 
 ## Original Streamlit app
 

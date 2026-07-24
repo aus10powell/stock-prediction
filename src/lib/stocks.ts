@@ -34,6 +34,10 @@ export async function loadStockHistory(ticker: string): Promise<PricePoint[]> {
       date: new Date(q.date).toISOString().slice(0, 10),
       open: q.open as number,
       close: q.close as number,
+      adjustedClose:
+        typeof q.adjclose === "number" && Number.isFinite(q.adjclose)
+          ? q.adjclose
+          : undefined,
     }));
 
   if (history.length === 0) {

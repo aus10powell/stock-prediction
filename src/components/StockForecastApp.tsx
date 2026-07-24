@@ -2,15 +2,18 @@
 
 import { FormEvent, useEffect, useState, useTransition } from "react";
 import { ForecastCharts } from "@/components/ForecastCharts";
+import { MonteCarloPanel } from "@/components/MonteCarloPanel";
 import type {
   ForecastPoint,
   PricePoint,
   SeasonalityPoint,
 } from "@/lib/forecast";
+import type { MonteCarloResult } from "@/lib/monteCarlo";
 
 type ForecastResponse = {
   ticker: string;
   years: number;
+  days: number;
   history: PricePoint[];
   forecast: ForecastPoint[];
   weekly: SeasonalityPoint[];
@@ -18,21 +21,28 @@ type ForecastResponse = {
   trend: SeasonalityPoint[];
   rawTail: PricePoint[];
   forecastTail: ForecastPoint[];
+  monteCarlo: MonteCarloResult;
   error?: string;
 };
 
 export function StockForecastApp() {
   const [ticker, setTicker] = useState("GME");
   const [years, setYears] = useState(1);
+  const [days, setDays] = useState(20);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<ForecastResponse | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  async function fetchForecast(nextTicker: string, nextYears: number) {
+  async function fetchForecast(
+    nextTicker: string,
+    nextYears: number,
+    nextDays: number,
+  ) {
     const params = new URLSearchParams({
       ticker: nextTicker,
       years: String(nextYears),
+      days: String(nextDays),
     });
     const res = await fetch(`/api/forecast?${params.toString()}`);
     const json = (await res.json()) as ForecastResponse;
@@ -42,10 +52,14 @@ export function StockForecastApp() {
     return json;
   }
 
-  function runForecast(nextTicker = ticker, nextYears = years) {
+  function runForecast(
+    nextTicker = ticker,
+    nextYears = years,
+    nextDays = days,
+  ) {
     startTransition(async () => {
       try {
-        const json = await fetchForecast(nextTicker, nextYears);
+        const json = await fetchForecast(nextTicker, nextYears, nextDays);
         setError(null);
         setData(json);
       } catch (err) {
@@ -61,7 +75,7 @@ export function StockForecastApp() {
     let cancelled = false;
     startTransition(async () => {
       try {
-        const json = await fetchForecast("GME", 1);
+        const json = await fetchForecast("GME", 1, 20);
         if (cancelled) return;
         setError(null);
         setData(json);
@@ -91,8 +105,8 @@ export function StockForecastApp() {
         <p className="byline">Austin Powell</p>
         <h1 className="brand">Stock Forecast</h1>
         <p className="lede">
-          Live Yahoo Finance history with trend and seasonal forecasts for any
-          ticker — now on Vercel.
+          Explore trend forecasts and the historical probability of a stock
+          moving at least 1% over your chosen horizon.
         </p>
 
         <form className="controls" onSubmit={onSubmit}>
@@ -122,14 +136,32 @@ export function StockForecastApp() {
             />
           </label>
 
+          <label className="field slider-field">
+            <span>
+              Probability horizon <strong>{days} days</strong>
+            </span>
+            <input
+              type="range"
+              min={1}
+              max={252}
+              step={1}
+              value={days}
+              onChange={(e) => setDays(Number(e.target.value))}
+              aria-label="Trading days for probability simulation"
+            />
+          </label>
+
           <button className="cta" type="submit" disabled={isPending}>
-            {isPending ? "Training…" : "Run forecast"}
+            {isPending ? "Simulating…" : "Run analysis"}
           </button>
         </form>
 
         {error ? <p className="error">{error}</p> : null}
         {isPending ? (
-          <p className="status">Loading market data and fitting the model…</p>
+          <p className="status">
+            Loading market data, fitting the model, and simulating 10,000
+            paths…
+          </p>
         ) : null}
       </header>
 
@@ -172,6 +204,8 @@ export function StockForecastApp() {
               </table>
             </div>
           </section>
+
+          <MonteCarloPanel result={data.monteCarlo} ticker={data.ticker} />
 
           <ForecastCharts
             history={data.history}

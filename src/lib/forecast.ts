@@ -2,6 +2,7 @@ export type PricePoint = {
   date: string;
   open: number;
   close: number;
+  adjustedClose?: number;
 };
 
 export type ForecastPoint = {
