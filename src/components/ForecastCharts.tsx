@@ -16,9 +16,11 @@ import {
 } from "recharts";
 import type {
   ForecastPoint,
+  ModelFit,
   PricePoint,
   SeasonalityPoint,
 } from "@/lib/forecast";
+import { money } from "@/lib/format";
 
 type Props = {
   history: PricePoint[];
@@ -26,13 +28,10 @@ type Props = {
   weekly: SeasonalityPoint[];
   yearly: SeasonalityPoint[];
   trend: SeasonalityPoint[];
+  fit: ModelFit;
   years: number;
   ticker: string;
 };
-
-function money(value: number) {
-  return `$${value.toFixed(2)}`;
-}
 
 export function ForecastCharts({
   history,
@@ -40,21 +39,21 @@ export function ForecastCharts({
   weekly,
   yearly,
   trend,
+  fit,
   years,
   ticker,
 }: Props) {
-  const historyChart = history.map((h) => ({
-    date: h.date,
-    open: h.open,
-    close: h.close,
+  const historyChart = history.map((point) => ({
+    date: point.date,
+    open: point.open,
+    close: point.close,
   }));
 
-  const forecastChart = forecast.map((f) => ({
-    date: f.date,
-    actual: f.actualClose,
-    yhat: f.yhat,
-    lower: f.yhatLower,
-    upper: f.yhatUpper,
+  const forecastChart = forecast.map((point) => ({
+    date: point.date,
+    actual: point.actualClose,
+    yhat: point.yhat,
+    range: [point.yhatLower, point.yhatUpper],
   }));
 
   return (
@@ -62,7 +61,7 @@ export function ForecastCharts({
       <section className="panel reveal" style={{ animationDelay: "80ms" }}>
         <div className="panel-heading">
           <h2>Price history</h2>
-          <p>Open and close for {ticker} with a rangeslider-friendly view.</p>
+          <p>Open and close for {ticker} since 2015.</p>
         </div>
         <div className="chart-frame">
           <ResponsiveContainer width="100%" height={320}>
@@ -76,7 +75,7 @@ export function ForecastCharts({
                 tickLine={false}
               />
               <YAxis
-                tickFormatter={(v) => `$${v}`}
+                tickFormatter={(value) => `$${value}`}
                 width={56}
                 tick={{ fill: "#4a5c52", fontSize: 12 }}
                 axisLine={false}
@@ -110,21 +109,39 @@ export function ForecastCharts({
 
       <section className="panel reveal" style={{ animationDelay: "160ms" }}>
         <div className="panel-heading">
-          <h2>Forecast plot · {years} year{years > 1 ? "s" : ""}</h2>
+          <p className="eyebrow">Model fit diagnostic</p>
+          <h2>Trend and seasonality fit</h2>
           <p>
-            Trend plus weekly and yearly seasonality, with a 95% uncertainty
-            band.
+            How well a straight trend plus weekday and yearly seasonal terms
+            describe {ticker}, extended {years * 252} trading days past the last
+            close. Prices do not actually follow a deterministic trend, so read
+            the extension as the shape of the fitted line, not a forecast — the
+            probability panel above is the forward-looking view.
           </p>
         </div>
+
+        <dl className="assumptions compact">
+          <div>
+            <dt>R²</dt>
+            <dd>{fit.rSquared.toFixed(3)}</dd>
+          </div>
+          <div>
+            <dt>Residual std</dt>
+            <dd>{money(fit.residualStd)}</dd>
+          </div>
+          <div>
+            <dt>Trend per trading day</dt>
+            <dd>{money(fit.slopePerTradingDay)}</dd>
+          </div>
+          <div>
+            <dt>Observations</dt>
+            <dd>{fit.observations.toLocaleString()}</dd>
+          </div>
+        </dl>
+
         <div className="chart-frame">
           <ResponsiveContainer width="100%" height={360}>
             <AreaChart data={forecastChart}>
-              <defs>
-                <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#1f8a6e" stopOpacity={0.22} />
-                  <stop offset="100%" stopColor="#1f8a6e" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
               <CartesianGrid stroke="rgba(18,32,26,0.08)" vertical={false} />
               <XAxis
                 dataKey="date"
@@ -134,30 +151,29 @@ export function ForecastCharts({
                 tickLine={false}
               />
               <YAxis
-                tickFormatter={(v) => `$${v}`}
+                tickFormatter={(value) => `$${value}`}
                 width={56}
                 tick={{ fill: "#4a5c52", fontSize: 12 }}
                 axisLine={false}
                 tickLine={false}
               />
               <Tooltip
-                formatter={(value) => money(Number(value))}
+                formatter={(value, name) =>
+                  Array.isArray(value)
+                    ? [`${money(value[0])} – ${money(value[1])}`, name]
+                    : [money(Number(value)), name]
+                }
                 contentStyle={tooltipStyle}
               />
               <Legend />
               <Area
                 type="monotone"
-                dataKey="upper"
+                dataKey="range"
+                name="95% prediction interval"
                 stroke="none"
-                fill="url(#band)"
-                name="Upper"
-              />
-              <Area
-                type="monotone"
-                dataKey="lower"
-                stroke="none"
-                fill="#f3f6f2"
-                name="Lower"
+                fill="#1f8a6e"
+                fillOpacity={0.16}
+                isAnimationActive={false}
               />
               <Line
                 type="monotone"
@@ -170,7 +186,7 @@ export function ForecastCharts({
               <Line
                 type="monotone"
                 dataKey="yhat"
-                name="Forecast"
+                name="Fitted"
                 stroke="#1f8a6e"
                 dot={false}
                 strokeWidth={2}
@@ -179,9 +195,16 @@ export function ForecastCharts({
             </AreaChart>
           </ResponsiveContainer>
         </div>
+        <p className="disclaimer">
+          The interval widens as the line moves away from the fitted data, since
+          extrapolation is less certain than in-sample fit.
+        </p>
       </section>
 
-      <section className="components-grid reveal" style={{ animationDelay: "240ms" }}>
+      <section
+        className="components-grid reveal"
+        style={{ animationDelay: "240ms" }}
+      >
         <div className="panel">
           <div className="panel-heading">
             <h2>Trend</h2>
@@ -193,7 +216,7 @@ export function ForecastCharts({
                 <CartesianGrid stroke="rgba(18,32,26,0.08)" vertical={false} />
                 <XAxis dataKey="label" hide />
                 <YAxis
-                  tickFormatter={(v) => `$${v}`}
+                  tickFormatter={(value) => `$${value}`}
                   width={48}
                   tick={{ fill: "#4a5c52", fontSize: 11 }}
                   axisLine={false}
@@ -217,8 +240,8 @@ export function ForecastCharts({
 
         <div className="panel">
           <div className="panel-heading">
-            <h2>Weekly seasonality</h2>
-            <p>Average weekday lift after removing trend.</p>
+            <h2>Weekday effect</h2>
+            <p>Average weekday offset, jointly estimated.</p>
           </div>
           <div className="chart-frame compact">
             <ResponsiveContainer width="100%" height={220}>
@@ -246,7 +269,7 @@ export function ForecastCharts({
         <div className="panel">
           <div className="panel-heading">
             <h2>Yearly seasonality</h2>
-            <p>Month-level Fourier seasonality in the residual.</p>
+            <p>Month-level Fourier terms. Largely noise for equities.</p>
           </div>
           <div className="chart-frame compact">
             <ResponsiveContainer width="100%" height={220}>

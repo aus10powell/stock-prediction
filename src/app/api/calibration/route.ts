@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   cacheHeaders,
+  driftParam,
   enforceRateLimit,
   errorResponse,
+  horizonParam,
+  seedParam,
+  thresholdParam,
   tickerParam,
-  yearsParam,
 } from "@/lib/apiSupport";
-import { buildForecast } from "@/lib/forecast";
+import { runCalibrationBacktest } from "@/lib/calibration";
 import { loadStockHistory, normalizeTicker } from "@/lib/stocks";
-import { TRADING_DAYS_PER_YEAR } from "@/lib/tradingCalendar";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -20,22 +22,24 @@ export async function GET(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
     const ticker = normalizeTicker(tickerParam(params));
-    const years = yearsParam(params);
+    const horizonDays = horizonParam(params);
+    const thresholdPercent = thresholdParam(params);
+    const driftMode = driftParam(params);
+    const seed = seedParam(params);
 
     const history = await loadStockHistory(ticker);
-    const result = buildForecast(history, years * TRADING_DAYS_PER_YEAR);
+    const calibration = runCalibrationBacktest(history, {
+      horizonDays,
+      thresholdPercent,
+      driftMode,
+      seed,
+    });
 
     return NextResponse.json(
-      {
-        ticker,
-        years,
-        ...result,
-        rawTail: history.slice(-8),
-        forecastTail: result.forecast.slice(-8),
-      },
-      { headers: cacheHeaders(300) },
+      { ticker, ...calibration },
+      { headers: cacheHeaders(900) },
     );
   } catch (error) {
-    return errorResponse(error, "Unable to build forecast.");
+    return errorResponse(error, "Unable to run the calibration backtest.");
   }
 }

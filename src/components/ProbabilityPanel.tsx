@@ -12,25 +12,15 @@ import {
   YAxis,
 } from "recharts";
 import type { MonteCarloResult } from "@/lib/monteCarlo";
+import { money, percent, signedPercent } from "@/lib/format";
 
 type Props = {
   result: MonteCarloResult;
   ticker: string;
 };
 
-function percent(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "percent",
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  }).format(value);
-}
-
-function money(value: number) {
-  return `$${value.toFixed(2)}`;
-}
-
-export function MonteCarloPanel({ result, ticker }: Props) {
+export function ProbabilityPanel({ result, ticker }: Props) {
+  const { assumptions } = result;
   const chartData = result.percentiles.map((point) => ({
     day: point.day,
     outerRange: [point.p10, point.p90],
@@ -43,13 +33,13 @@ export function MonteCarloPanel({ result, ticker }: Props) {
       <div className="panel-heading">
         <p className="eyebrow">Historical simulation</p>
         <h2>
-          {ticker} after {result.horizonDays} trading day
+          {ticker} over the next {result.horizonDays} trading day
           {result.horizonDays === 1 ? "" : "s"}
         </h2>
         <p>
-          {result.simulations.toLocaleString()} paths sampled in{" "}
-          {result.blockSize}-day blocks from the latest{" "}
-          {result.lookbackDays.toLocaleString()} daily returns.
+          {assumptions.simulations.toLocaleString()} paths, resampled in{" "}
+          {assumptions.blockSize}-day blocks from the latest{" "}
+          {assumptions.lookbackDays.toLocaleString()} daily returns.
         </p>
       </div>
 
@@ -68,17 +58,48 @@ export function MonteCarloPanel({ result, ticker }: Props) {
         </article>
         <article className="metric-card">
           <span>Median simulated return</span>
-          <strong>{percent(result.medianReturn)}</strong>
+          <strong>{signedPercent(result.medianReturn)}</strong>
         </article>
       </div>
 
-      <div className="range-summary">
-        <span>Current close: {money(result.currentPrice)}</span>
-        <span>
-          80% simulated range: {money(result.terminalP10)}–
-          {money(result.terminalP90)}
-        </span>
-      </div>
+      <dl className="assumptions">
+        <div>
+          <dt>Current close</dt>
+          <dd>{money(result.currentPrice)}</dd>
+        </div>
+        <div>
+          <dt>80% simulated range</dt>
+          <dd>
+            {money(result.terminalP10)} – {money(result.terminalP90)}
+          </dd>
+        </div>
+        <div>
+          <dt>Assumed drift (annualized)</dt>
+          <dd>
+            {assumptions.driftMode === "zero"
+              ? "0% (drift removed)"
+              : signedPercent(assumptions.annualizedDrift)}
+          </dd>
+        </div>
+        <div>
+          <dt>Volatility (annualized)</dt>
+          <dd>{percent(assumptions.annualizedVolatility)}</dd>
+        </div>
+      </dl>
+
+      {assumptions.driftMode === "historical" ? (
+        <p className="callout">
+          These paths inherit the average drift of the lookback window, so a
+          period of strong gains tilts the upside probability regardless of
+          today&apos;s conditions. Switch drift to <strong>zero</strong> to see
+          the volatility-only answer.
+        </p>
+      ) : (
+        <p className="callout">
+          Drift has been removed, so up and down probabilities reflect
+          volatility and the shape of the return distribution alone.
+        </p>
+      )}
 
       <div className="chart-frame">
         <ResponsiveContainer width="100%" height={340}>
@@ -102,12 +123,11 @@ export function MonteCarloPanel({ result, ticker }: Props) {
             />
             <Tooltip
               labelFormatter={(value) => `Trading day ${value}`}
-              formatter={(value, name) => {
-                if (Array.isArray(value)) {
-                  return [`${money(value[0])} – ${money(value[1])}`, name];
-                }
-                return [money(Number(value)), name];
-              }}
+              formatter={(value, name) =>
+                Array.isArray(value)
+                  ? [`${money(value[0])} – ${money(value[1])}`, name]
+                  : [money(Number(value)), name]
+              }
               contentStyle={tooltipStyle}
             />
             <Area
@@ -147,9 +167,9 @@ export function MonteCarloPanel({ result, ticker }: Props) {
       </div>
 
       <p className="disclaimer">
-        This historical simulation assumes recent return patterns may recur. It
-        does not predict news, market regimes, or future performance and is not
-        investment advice.
+        This is a historical simulation, not a prediction. It assumes recent
+        return patterns may recur and cannot account for news, earnings, or
+        regime changes. Not investment advice.
       </p>
     </section>
   );

@@ -1,4 +1,5 @@
 import YahooFinance from "yahoo-finance2";
+import { createTtlCache } from "./cache";
 import type { PricePoint } from "./forecast";
 
 const yahooFinance = new YahooFinance({
@@ -6,37 +7,42 @@ const yahooFinance = new YahooFinance({
 });
 
 const START = "2015-01-01";
+const TICKER_PATTERN = /^[A-Z.\-]{1,10}$/;
+export const HISTORY_TTL_MS = 15 * 60 * 1000;
 
-export async function loadStockHistory(ticker: string): Promise<PricePoint[]> {
+export function normalizeTicker(ticker: string): string {
   const symbol = ticker.trim().toUpperCase();
-  if (!/^[A-Z.\-]{1,10}$/.test(symbol)) {
+  if (!TICKER_PATTERN.test(symbol)) {
     throw new Error("Enter a valid ticker symbol (e.g. GME, AAPL, TSLA).");
   }
+  return symbol;
+}
 
-  const today = new Date();
+export async function fetchStockHistory(ticker: string): Promise<PricePoint[]> {
+  const symbol = normalizeTicker(ticker);
+
   const rows = await yahooFinance.chart(symbol, {
     period1: START,
-    period2: today,
+    period2: new Date(),
     interval: "1d",
   });
 
-  const quotes = rows.quotes ?? [];
-  const history: PricePoint[] = quotes
+  const history: PricePoint[] = (rows.quotes ?? [])
     .filter(
-      (q) =>
-        q.date &&
-        typeof q.open === "number" &&
-        typeof q.close === "number" &&
-        Number.isFinite(q.open) &&
-        Number.isFinite(q.close),
+      (quote) =>
+        quote.date &&
+        typeof quote.open === "number" &&
+        typeof quote.close === "number" &&
+        Number.isFinite(quote.open) &&
+        Number.isFinite(quote.close),
     )
-    .map((q) => ({
-      date: new Date(q.date).toISOString().slice(0, 10),
-      open: q.open as number,
-      close: q.close as number,
+    .map((quote) => ({
+      date: new Date(quote.date).toISOString().slice(0, 10),
+      open: quote.open as number,
+      close: quote.close as number,
       adjustedClose:
-        typeof q.adjclose === "number" && Number.isFinite(q.adjclose)
-          ? q.adjclose
+        typeof quote.adjclose === "number" && Number.isFinite(quote.adjclose)
+          ? quote.adjclose
           : undefined,
     }));
 
@@ -45,4 +51,12 @@ export async function loadStockHistory(ticker: string): Promise<PricePoint[]> {
   }
 
   return history;
+}
+
+const withCache = createTtlCache<PricePoint[]>(HISTORY_TTL_MS);
+
+/** Cached per warm instance; daily bars do not change within the TTL. */
+export function loadStockHistory(ticker: string): Promise<PricePoint[]> {
+  const symbol = normalizeTicker(ticker);
+  return withCache(symbol, () => fetchStockHistory(symbol));
 }

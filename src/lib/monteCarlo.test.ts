@@ -25,7 +25,7 @@ const variedHistory = historyFromReturns(
 );
 
 describe("buildMonteCarloForecast", () => {
-  it("returns exhaustive threshold probabilities and requested percentiles", () => {
+  it("returns exhaustive threshold probabilities and ordered percentiles", () => {
     const result = buildMonteCarloForecast(variedHistory, {
       horizonDays: 20,
       simulations: 1_000,
@@ -34,9 +34,7 @@ describe("buildMonteCarloForecast", () => {
 
     expect(result.percentiles).toHaveLength(21);
     expect(
-      result.probabilityUp +
-        result.probabilityDown +
-        result.probabilityWithin,
+      result.probabilityUp + result.probabilityDown + result.probabilityWithin,
     ).toBeCloseTo(1, 12);
     expect(result.percentiles[0]).toEqual({
       day: 0,
@@ -56,10 +54,57 @@ describe("buildMonteCarloForecast", () => {
 
   it("is reproducible for the same seed", () => {
     const options = { horizonDays: 10, simulations: 500, seed: 7 };
-    const first = buildMonteCarloForecast(variedHistory, options);
-    const second = buildMonteCarloForecast(variedHistory, options);
+    expect(buildMonteCarloForecast(variedHistory, options)).toEqual(
+      buildMonteCarloForecast(variedHistory, options),
+    );
+  });
 
-    expect(second).toEqual(first);
+  it("honours the requested threshold", () => {
+    const options = { horizonDays: 20, simulations: 2_000, seed: 5 };
+    const onePercent = buildMonteCarloForecast(variedHistory, {
+      ...options,
+      thresholdPercent: 1,
+    });
+    const tenPercent = buildMonteCarloForecast(variedHistory, {
+      ...options,
+      thresholdPercent: 10,
+    });
+
+    expect(tenPercent.probabilityUp).toBeLessThan(onePercent.probabilityUp);
+    expect(tenPercent.probabilityWithin).toBeGreaterThan(
+      onePercent.probabilityWithin,
+    );
+    expect(tenPercent.thresholdPercent).toBe(10);
+  });
+
+  it("removes drift in zero-drift mode and reports the assumption", () => {
+    const trending = historyFromReturns(
+      Array.from({ length: 300 }, (_, index) =>
+        index % 2 === 0 ? 0.014 : 0.006,
+      ),
+    );
+
+    const historical = buildMonteCarloForecast(trending, {
+      horizonDays: 20,
+      simulations: 2_000,
+      seed: 11,
+    });
+    const zeroDrift = buildMonteCarloForecast(trending, {
+      horizonDays: 20,
+      simulations: 2_000,
+      seed: 11,
+      driftMode: "zero",
+    });
+
+    expect(historical.assumptions.annualizedDrift).toBeGreaterThan(1);
+    expect(historical.probabilityUp).toBe(1);
+
+    expect(zeroDrift.assumptions.annualizedDrift).toBe(0);
+    expect(zeroDrift.medianReturn).toBeCloseTo(0, 6);
+    expect(zeroDrift.assumptions.annualizedVolatility).toBeCloseTo(
+      historical.assumptions.annualizedVolatility,
+      12,
+    );
   });
 
   it("uses adjusted closes to avoid split-driven returns", () => {
@@ -76,12 +121,18 @@ describe("buildMonteCarloForecast", () => {
     expect(result.medianReturn).toBe(0);
   });
 
-  it("rejects unsupported horizons and insufficient history", () => {
+  it("rejects unsupported inputs", () => {
     expect(() =>
       buildMonteCarloForecast(variedHistory, { horizonDays: 0 }),
     ).toThrow("Horizon days must be an integer between 1 and 252.");
     expect(() =>
       buildMonteCarloForecast(variedHistory.slice(0, 20), { horizonDays: 5 }),
-    ).toThrow("Need at least 30 trading days");
+    ).toThrow("at least 30 trading days");
+    expect(() =>
+      buildMonteCarloForecast(variedHistory, {
+        horizonDays: 5,
+        thresholdPercent: 0,
+      }),
+    ).toThrow("Threshold percent");
   });
 });

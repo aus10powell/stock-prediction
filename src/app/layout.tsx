@@ -14,9 +14,9 @@ const body = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "Stock Forecast · Austin Powell",
+  title: "Stock Odds · Austin Powell",
   description:
-    "Interactive stock forecasting app with Yahoo Finance history and seasonal trend projections.",
+    "Backtested Monte Carlo probabilities that a stock moves by at least a chosen percentage over a chosen number of trading days.",
 };
 
 export default function RootLayout({

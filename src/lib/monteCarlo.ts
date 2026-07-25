@@ -1,4 +1,7 @@
 import type { PricePoint } from "./forecast";
+import { TRADING_DAYS_PER_YEAR } from "./tradingCalendar";
+
+export type DriftMode = "historical" | "zero";
 
 export type MonteCarloPoint = {
   day: number;
@@ -9,13 +12,20 @@ export type MonteCarloPoint = {
   p90: number;
 };
 
+export type MonteCarloAssumptions = {
+  /** Compounded drift of the sampled returns, annualized. */
+  annualizedDrift: number;
+  annualizedVolatility: number;
+  driftMode: DriftMode;
+  lookbackDays: number;
+  blockSize: number;
+  simulations: number;
+  seed: number;
+};
+
 export type MonteCarloResult = {
   currentPrice: number;
   horizonDays: number;
-  simulations: number;
-  lookbackDays: number;
-  blockSize: number;
-  seed: number;
   thresholdPercent: number;
   probabilityUp: number;
   probabilityDown: number;
@@ -24,22 +34,30 @@ export type MonteCarloResult = {
   terminalP10: number;
   terminalP90: number;
   percentiles: MonteCarloPoint[];
+  assumptions: MonteCarloAssumptions;
 };
 
-type MonteCarloOptions = {
+export type MonteCarloOptions = {
   horizonDays: number;
   simulations?: number;
   lookbackDays?: number;
   blockSize?: number;
   seed?: number;
   thresholdPercent?: number;
+  driftMode?: DriftMode;
 };
 
-const DEFAULT_SIMULATIONS = 10_000;
-const DEFAULT_LOOKBACK_DAYS = 504;
-const DEFAULT_BLOCK_SIZE = 5;
-const DEFAULT_SEED = 42;
-const DEFAULT_THRESHOLD_PERCENT = 1;
+export const MONTE_CARLO_DEFAULTS = {
+  simulations: 10_000,
+  lookbackDays: 504,
+  blockSize: 5,
+  seed: 42,
+  thresholdPercent: 1,
+  driftMode: "historical" as DriftMode,
+};
+
+export const MAX_HORIZON_DAYS = 252;
+export const MIN_HISTORY_DAYS = 30;
 
 function seededRandom(seed: number) {
   let state = seed >>> 0;
@@ -52,14 +70,13 @@ function seededRandom(seed: number) {
   };
 }
 
-function percentile(sorted: number[], probability: number): number {
+/** Linear-interpolated quantile of an already-sorted sample. */
+function quantile(sorted: ArrayLike<number>, probability: number): number {
   const index = (sorted.length - 1) * probability;
   const lower = Math.floor(index);
   const weight = index - lower;
-  const upper = sorted[lower + 1];
-  return upper === undefined
-    ? sorted[lower]
-    : sorted[lower] * (1 - weight) + upper * weight;
+  if (lower + 1 >= sorted.length) return sorted[lower];
+  return sorted[lower] * (1 - weight) + sorted[lower + 1] * weight;
 }
 
 function assertIntegerInRange(
@@ -69,14 +86,31 @@ function assertIntegerInRange(
   maximum: number,
 ) {
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+    throw new Error(
+      `${name} must be an integer between ${minimum} and ${maximum}.`,
+    );
   }
 }
 
+/** Adjusted-close log returns, so splits and dividends do not look like moves. */
+export function logReturns(history: PricePoint[], lookbackDays: number): number[] {
+  const recent = history.slice(-(lookbackDays + 1));
+  const prices = recent.map((point) => point.adjustedClose ?? point.close);
+  if (prices.some((price) => !Number.isFinite(price) || price <= 0)) {
+    throw new Error("Price history contains invalid adjusted close values.");
+  }
+  return prices.slice(1).map((price, index) => Math.log(price / prices[index]));
+}
+
 /**
- * Simulates future prices by sampling five-day blocks of recent adjusted
- * log returns. Block sampling retains some short-term volatility clustering
- * without assuming returns follow a normal distribution.
+ * Simulates future prices by resampling blocks of recent adjusted log returns.
+ * Sampling in blocks preserves some short-term volatility clustering, and
+ * avoids assuming returns are normally distributed.
+ *
+ * With `driftMode: "historical"` the simulation inherits whatever average drift
+ * the lookback window contains, which for a strong bull run bakes a meaningful
+ * upward tilt into the probabilities. `driftMode: "zero"` removes the mean so
+ * the result reflects volatility alone.
  */
 export function buildMonteCarloForecast(
   history: PricePoint[],
@@ -84,16 +118,17 @@ export function buildMonteCarloForecast(
 ): MonteCarloResult {
   const {
     horizonDays,
-    simulations = DEFAULT_SIMULATIONS,
-    lookbackDays = DEFAULT_LOOKBACK_DAYS,
-    blockSize = DEFAULT_BLOCK_SIZE,
-    seed = DEFAULT_SEED,
-    thresholdPercent = DEFAULT_THRESHOLD_PERCENT,
+    simulations = MONTE_CARLO_DEFAULTS.simulations,
+    lookbackDays = MONTE_CARLO_DEFAULTS.lookbackDays,
+    blockSize = MONTE_CARLO_DEFAULTS.blockSize,
+    seed = MONTE_CARLO_DEFAULTS.seed,
+    thresholdPercent = MONTE_CARLO_DEFAULTS.thresholdPercent,
+    driftMode = MONTE_CARLO_DEFAULTS.driftMode,
   } = options;
 
-  assertIntegerInRange(horizonDays, "Horizon days", 1, 252);
+  assertIntegerInRange(horizonDays, "Horizon days", 1, MAX_HORIZON_DAYS);
   assertIntegerInRange(simulations, "Simulations", 100, 25_000);
-  assertIntegerInRange(lookbackDays, "Lookback days", 30, 2_520);
+  assertIntegerInRange(lookbackDays, "Lookback days", MIN_HISTORY_DAYS, 2_520);
   assertIntegerInRange(blockSize, "Block size", 1, 20);
 
   if (!Number.isFinite(seed)) {
@@ -106,84 +141,106 @@ export function buildMonteCarloForecast(
   ) {
     throw new Error("Threshold percent must be between 0 and 100.");
   }
-  if (history.length < 30) {
-    throw new Error("Need at least 30 trading days of history to simulate.");
+  if (driftMode !== "historical" && driftMode !== "zero") {
+    throw new Error("Drift mode must be 'historical' or 'zero'.");
+  }
+  if (history.length < MIN_HISTORY_DAYS) {
+    throw new Error(
+      `Need at least ${MIN_HISTORY_DAYS} trading days of history to simulate.`,
+    );
   }
 
-  const recent = history.slice(-(lookbackDays + 1));
-  const adjustedPrices = recent.map((point) => point.adjustedClose ?? point.close);
-  if (adjustedPrices.some((price) => !Number.isFinite(price) || price <= 0)) {
-    throw new Error("Price history contains invalid adjusted close values.");
-  }
+  const rawReturns = logReturns(history, lookbackDays);
+  const meanReturn =
+    rawReturns.reduce((sum, value) => sum + value, 0) / rawReturns.length;
+  const returns =
+    driftMode === "zero"
+      ? rawReturns.map((value) => value - meanReturn)
+      : rawReturns;
 
-  const returns = adjustedPrices.slice(1).map((price, index) => {
-    return Math.log(price / adjustedPrices[index]);
-  });
-  const effectiveBlockSize = Math.min(blockSize, returns.length);
-  const lastBlockStart = returns.length - effectiveBlockSize;
-  const currentPrice = history.at(-1)?.close;
+  const variance =
+    rawReturns.reduce((sum, value) => sum + (value - meanReturn) ** 2, 0) /
+    Math.max(1, rawReturns.length - 1);
+
+  const currentPrice = history[history.length - 1]?.close;
   if (!currentPrice || !Number.isFinite(currentPrice) || currentPrice <= 0) {
     throw new Error("Current close price is unavailable.");
   }
 
+  const effectiveBlockSize = Math.min(blockSize, returns.length);
+  const blockStarts = returns.length - effectiveBlockSize + 1;
   const random = seededRandom(Math.trunc(seed));
-  const pricesByDay = Array.from(
+
+  const pathsByDay = Array.from(
     { length: horizonDays + 1 },
-    (_, day) => (day === 0 ? [currentPrice] : ([] as number[])),
+    () => new Float64Array(simulations),
   );
-  const terminalReturns = new Array<number>(simulations);
+  pathsByDay[0].fill(currentPrice);
+  const terminalReturns = new Float64Array(simulations);
 
   for (let simulation = 0; simulation < simulations; simulation++) {
     let price = currentPrice;
     let day = 1;
 
     while (day <= horizonDays) {
-      const blockStart = Math.floor(random() * (lastBlockStart + 1));
+      const blockStart = Math.floor(random() * blockStarts);
       for (
         let offset = 0;
         offset < effectiveBlockSize && day <= horizonDays;
         offset++, day++
       ) {
         price *= Math.exp(returns[blockStart + offset]);
-        pricesByDay[day].push(price);
+        pathsByDay[day][simulation] = price;
       }
     }
 
     terminalReturns[simulation] = price / currentPrice - 1;
   }
 
-  const percentiles = pricesByDay.map((prices, day) => {
-    prices.sort((a, b) => a - b);
+  const percentiles = pathsByDay.map((prices, day) => {
+    prices.sort();
     return {
       day,
-      p10: percentile(prices, 0.1),
-      p25: percentile(prices, 0.25),
-      median: percentile(prices, 0.5),
-      p75: percentile(prices, 0.75),
-      p90: percentile(prices, 0.9),
+      p10: quantile(prices, 0.1),
+      p25: quantile(prices, 0.25),
+      median: quantile(prices, 0.5),
+      p75: quantile(prices, 0.75),
+      p90: quantile(prices, 0.9),
     };
   });
 
-  terminalReturns.sort((a, b) => a - b);
+  terminalReturns.sort();
   const threshold = thresholdPercent / 100;
-  const upCount = terminalReturns.filter((value) => value >= threshold).length;
-  const downCount = terminalReturns.filter((value) => value <= -threshold).length;
-  const terminal = percentiles.at(-1)!;
+  let upCount = 0;
+  let downCount = 0;
+  for (const value of terminalReturns) {
+    if (value >= threshold) upCount++;
+    else if (value <= -threshold) downCount++;
+  }
+
+  const terminal = percentiles[percentiles.length - 1];
+  const simulatedDrift = driftMode === "zero" ? 0 : meanReturn;
 
   return {
     currentPrice,
     horizonDays,
-    simulations,
-    lookbackDays: Math.min(lookbackDays, returns.length),
-    blockSize: effectiveBlockSize,
-    seed: Math.trunc(seed),
     thresholdPercent,
     probabilityUp: upCount / simulations,
     probabilityDown: downCount / simulations,
     probabilityWithin: (simulations - upCount - downCount) / simulations,
-    medianReturn: percentile(terminalReturns, 0.5),
+    medianReturn: quantile(terminalReturns, 0.5),
     terminalP10: terminal.p10,
     terminalP90: terminal.p90,
     percentiles,
+    assumptions: {
+      annualizedDrift:
+        Math.exp(simulatedDrift * TRADING_DAYS_PER_YEAR) - 1,
+      annualizedVolatility: Math.sqrt(variance * TRADING_DAYS_PER_YEAR),
+      driftMode,
+      lookbackDays: Math.min(lookbackDays, rawReturns.length),
+      blockSize: effectiveBlockSize,
+      simulations,
+      seed: Math.trunc(seed),
+    },
   };
 }
