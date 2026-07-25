@@ -24,6 +24,9 @@ export type SeasonalityPoint = {
 export type ModelFit = {
   rSquared: number;
   residualStd: number;
+  /** Standard deviation of day-to-day residual changes, driving forward widening. */
+  residualStepStd: number;
+  residualAutocorrelation: number;
   slopePerTradingDay: number;
   observations: number;
   parameters: number;
@@ -42,6 +45,18 @@ export type ForecastResult = {
 const FOURIER_ORDER = 3;
 const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const Z_95 = 1.959964;
+
+function lag1Autocorrelation(values: number[]): number {
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  let numerator = 0;
+  let denominator = 0;
+  for (let i = 0; i < values.length; i++) {
+    const centered = values[i] - mean;
+    denominator += centered * centered;
+    if (i > 0) numerator += centered * (values[i - 1] - mean);
+  }
+  return denominator === 0 ? 0 : numerator / denominator;
+}
 
 function dayOfYear(date: Date): number {
   const start = Date.UTC(date.getUTCFullYear(), 0, 0);
@@ -127,11 +142,30 @@ export function buildForecast(
   const yearlyMean =
     yearlySamples.reduce((sum, v) => sum + v, 0) / yearlySamples.length;
 
-  const predict = (date: Date, index: number) => {
+  const residuals = fit.residuals;
+  const residualSteps = residuals
+    .slice(1)
+    .map((value, index) => value - residuals[index]);
+  const residualStepStd = Math.sqrt(
+    residualSteps.reduce((sum, value) => sum + value * value, 0) /
+      Math.max(1, residualSteps.length),
+  );
+  const residualAutocorrelation = lag1Autocorrelation(residuals);
+
+  /**
+   * In-sample uncertainty is the usual σ√(1 + leverage). Going forward, that
+   * term alone barely grows, yet residuals here are strongly autocorrelated
+   * (deviations from trend persist for months rather than resetting daily), so
+   * treating them as independent would understate the risk of extrapolating.
+   * Forward variance therefore accumulates one residual step per trading day.
+   */
+  const predict = (date: Date, index: number, stepsAhead = 0) => {
     const row = designRow(date, index);
     const yhat = row.reduce((sum, value, i) => sum + value * beta[i], 0);
-    // Widen with distance from the fitted data: σ√(1 + leverage).
-    const band = Z_95 * residualStd * Math.sqrt(1 + leverage(row, covarianceUnscaled));
+    const parameterVariance =
+      residualStd ** 2 * (1 + leverage(row, covarianceUnscaled));
+    const accumulatedVariance = residualStepStd ** 2 * stepsAhead;
+    const band = Z_95 * Math.sqrt(parameterVariance + accumulatedVariance);
     return { yhat, band };
   };
 
@@ -147,7 +181,7 @@ export function buildForecast(
   });
 
   futureTradingDays(dates[lastIndex], tradingDaysAhead).forEach((date, step) => {
-    const { yhat, band } = predict(date, lastIndex + step + 1);
+    const { yhat, band } = predict(date, lastIndex + step + 1, step + 1);
     forecast.push({
       date: toDateKey(date),
       yhat,
@@ -192,6 +226,8 @@ export function buildForecast(
     fit: {
       rSquared: fit.rSquared,
       residualStd,
+      residualStepStd,
+      residualAutocorrelation,
       slopePerTradingDay,
       observations: history.length,
       parameters: beta.length,

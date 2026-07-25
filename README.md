@@ -85,6 +85,15 @@ happened. It reports reliability bins, a Brier score, and skill relative to
 always quoting the historical base rate. Overlapping horizons make the samples
 correlated, so this is a sanity check rather than a precise measurement.
 
+**What it currently shows.** For the tickers and horizons tested, the simulation
+is roughly calibrated on average at short horizons but does not beat the base
+rate, and gets worse as the horizon grows — for AAPL at a 1% threshold, skill
+was about -1% at 5 days and -19% at 63 days, in both drift modes. In other
+words, these probabilities are a reasonable description of volatility and a poor
+directional signal. That result is displayed rather than tuned away, since
+searching for settings that make the score look good on this same history would
+just be overfitting.
+
 ### Model fit diagnostic
 
 A joint least-squares fit of price against a linear trend, weekday effects, and

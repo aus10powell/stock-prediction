@@ -134,8 +134,8 @@ export function ForecastCharts({
             <dd>{money(fit.slopePerTradingDay)}</dd>
           </div>
           <div>
-            <dt>Observations</dt>
-            <dd>{fit.observations.toLocaleString()}</dd>
+            <dt>Residual autocorrelation</dt>
+            <dd>{fit.residualAutocorrelation.toFixed(3)}</dd>
           </div>
         </dl>
 
@@ -196,8 +196,10 @@ export function ForecastCharts({
           </ResponsiveContainer>
         </div>
         <p className="disclaimer">
-          The interval widens as the line moves away from the fitted data, since
-          extrapolation is less certain than in-sample fit.
+          The interval widens with the horizon. Residual autocorrelation of{" "}
+          {fit.residualAutocorrelation.toFixed(2)} means deviations from the
+          trend persist rather than reset each day, so uncertainty accumulates
+          the further out the line is extended.
         </p>
       </section>
 

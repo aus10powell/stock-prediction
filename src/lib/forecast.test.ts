@@ -57,18 +57,50 @@ describe("buildForecast", () => {
     }
   });
 
-  it("widens the prediction interval with horizon", () => {
-    const history = linearHistory(300, 0.4);
-    const result = buildForecast(history, 120);
-    const projected = result.forecast.slice(history.length);
+  it("widens the prediction interval roughly with the square root of horizon", () => {
+    // Persistent deviations from trend, so the accumulating term dominates.
+    const base = linearHistory(600, 0.2);
+    let wander = 0;
+    const history = base.map((point, index) => {
+      wander += Math.sin(index * 0.05) * 0.5;
+      return { ...point, close: point.close + wander };
+    });
 
+    const result = buildForecast(history, 200);
+    const projected = result.forecast.slice(history.length);
     const width = (index: number) =>
       projected[index].yhatUpper - projected[index].yhatLower;
 
-    expect(width(119)).toBeGreaterThan(width(0));
     for (let i = 1; i < projected.length; i++) {
-      expect(width(i)).toBeGreaterThanOrEqual(width(i - 1) - 1e-9);
+      expect(width(i)).toBeGreaterThan(width(i - 1));
     }
+
+    // Quadrupling the horizon should roughly double the interval width.
+    const ratio = width(199) / width(49);
+    expect(ratio).toBeGreaterThan(1.5);
+    expect(ratio).toBeLessThan(2.5);
+    expect(result.fit.residualStepStd).toBeGreaterThan(0);
+  });
+
+  it("distinguishes persistent residuals from independent noise", () => {
+    const base = linearHistory(400, 0.3);
+
+    const wandering = base.map((point, index) => ({
+      ...point,
+      close: point.close + Math.sin(index * 0.015) * 8,
+    }));
+    // Deterministic alternating noise: no persistence from one day to the next.
+    const choppy = base.map((point, index) => ({
+      ...point,
+      close: point.close + (index % 2 === 0 ? 4 : -4),
+    }));
+
+    expect(
+      buildForecast(wandering, 10).fit.residualAutocorrelation,
+    ).toBeGreaterThan(0.8);
+    expect(buildForecast(choppy, 10).fit.residualAutocorrelation).toBeLessThan(
+      -0.8,
+    );
   });
 
   it("recovers known seasonal amplitude with jointly fitted terms", () => {
